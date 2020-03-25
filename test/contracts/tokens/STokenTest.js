@@ -106,7 +106,7 @@ contract('SToken', function (accounts) {
     })
   })
 
-  describe.only('Token Burning', () => {
+  describe('Token Burning', () => {
     beforeEach(init)
 
     it.skip('only owner should be able to burn tokens', async () => {

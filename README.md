@@ -1,17 +1,17 @@
-#Ethereum Smart Contracts for Sport Tokens
- 
+#Ethereum Smart Contracts for SMaker
+
 ## Test locally
 
     npm install -g ganache-cli
     npm install
-    ganache-cli -e 10000
+    ganache-cli
     npm test
-    
+
 ## Deploy locally
 
 * Start testrpc ```ganache-cli -e 10000```
 * Deploy the contracts using truffle: ```truffle migrate```
-* Then launch truffle console to play with the contracts: ```truffle console```  
+* Then launch truffle console to play with the contracts: ```truffle console```
 
 ## Deploy on remix
 ```npm install -g truffle-flattener```

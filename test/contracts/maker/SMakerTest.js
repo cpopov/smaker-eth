@@ -25,13 +25,13 @@ contract('SMaker', function (accounts) {
   const thousandCoins = new BN(1000).mul(new BN(10).pow(new BN(DECIMALS)))
 
   let init = async () => {
-    longToken = await SToken.new(thousandCoins, 'SPY', 'S&P 500', false, {from: creatorAccount})
-    shortToken = await SToken.new(thousandCoins, 'XSPY', 'S&P 500 Short', true, {from: creatorAccount})
+    longToken = await SToken.new(0, 'SPY', 'S&P 500', false, {from: creatorAccount})
+    shortToken = await SToken.new(0, 'XSPY', 'S&P 500 Short', true, {from: creatorAccount})
     stableCoin = await SToken.new(thousandCoins, 'USD', 'USD', false, {from: creatorAccount})
     // give each user 10 USD
     await stableCoin.transfer(user1Account, tenCoins, {from: creatorAccount})
 
-    sMaker = await SMaker.new(stableCoin.address, shortToken.address, longToken.address, oracleAccount, {from: creatorAccount})
+    sMaker = await SMaker.new('SPY', stableCoin.address, shortToken.address, longToken.address, oracleAccount, {from: creatorAccount})
     await sMaker.setPrice(10 ** PRICE_DECIMALS, {from: oracleAccount})
 
     // transfer ownership to sMaker
@@ -55,7 +55,8 @@ contract('SMaker', function (accounts) {
 
     it('a user should be able to mint new long tokens if he provides collateral', async () => {
       await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
-      await sMaker.mintSTokens(oneCoin, true, {from: user1Account})
+      await sMaker.mintLongTokens(oneCoin, {from: user1Account})
+
       // assert that stable coin has been taken as collateral
       let coinBalance = await stableCoin.balanceOf.call(user1Account)
       expect(coinBalance).to.eq.BN(tenCoins.sub(oneCoin.div(new BN(5))))
@@ -69,7 +70,7 @@ contract('SMaker', function (accounts) {
 
     it('a user should be able to mint new short tokens if he provides collateral', async () => {
       await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
-      await sMaker.mintSTokens(oneCoin, false, {from: user1Account})
+      await sMaker.mintShortTokens(oneCoin, {from: user1Account})
       // assert that stable coin has been taken as collateral
       let coinBalance = await stableCoin.balanceOf.call(user1Account)
       expect(coinBalance).to.eq.BN(tenCoins.sub(oneCoin.div(new BN(5))))
@@ -84,12 +85,12 @@ contract('SMaker', function (accounts) {
     it('a user should be able to mint new long and short tokens if he provides collateral', async () => {
       // given existing long tokens
       await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
-      await sMaker.mintSTokens(oneCoin, true, {from: user1Account})
+      await sMaker.mintLongTokens(oneCoin, {from: user1Account})
 
       await logSMakerState(sMaker)
 
       // mint short tokens
-      await sMaker.mintSTokens(twoCoins, false, {from: user1Account})
+      await sMaker.mintShortTokens(twoCoins, {from: user1Account})
 
       await logSMakerState(sMaker)
 
@@ -104,40 +105,43 @@ contract('SMaker', function (accounts) {
       expect(sTokenBalance).to.eq.BN(twoCoins)
     })
 
-    // mint long and short
   })
 
   describe('Token burning', () => {
     beforeEach(async () => {
       await init()
       await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
-      await sMaker.mintSTokens(twoCoins, true, {from: user1Account})
-      await sMaker.mintSTokens(oneCoin, false, {from: user1Account})
+      await sMaker.mintLongTokens(twoCoins, {from: user1Account})
+      await sMaker.mintShortTokens(oneCoin, {from: user1Account})
     })
 
     it('a user should be able to burn long tokens', async () => {
-      await sMaker.burnSTokens(oneCoin, true, {from: user1Account})
+      await sMaker.burnLongTokens(oneCoin, {from: user1Account})
 
       // assert that SToken is burned
       let sTokenBalance = await longToken.balanceOf.call(user1Account)
       expect(sTokenBalance).to.eq.BN(oneCoin)
 
+      // assert that collateral is freed
+
       await logSMakerState(sMaker)
     })
 
     it('a user should be able to burn short tokens', async () => {
-      await sMaker.burnSTokens(oneCoin, false, {from: user1Account})
+      await sMaker.burnShortTokens(oneCoin, {from: user1Account})
 
       // assert that SToken is burned
       let sTokenBalance = await shortToken.balanceOf.call(user1Account)
       expect(sTokenBalance).to.eq.BN(0)
 
+      // assert that collateral is freed
+
       await logSMakerState(sMaker)
     })
 
     it('a user should be able to burn long and short tokens', async () => {
-      await sMaker.burnSTokens(oneCoin, true, {from: user1Account})
-      await sMaker.burnSTokens(oneCoin, false, {from: user1Account})
+      await sMaker.burnLongTokens(oneCoin, {from: user1Account})
+      await sMaker.burnShortTokens(oneCoin, {from: user1Account})
 
       // assert that SToken is burned
       let sTokenBalance = await longToken.balanceOf.call(user1Account)
@@ -145,6 +149,8 @@ contract('SMaker', function (accounts) {
 
       sTokenBalance = await shortToken.balanceOf.call(user1Account)
       expect(sTokenBalance).to.eq.BN(0)
+
+      // assert that collateral is freed
 
       await logSMakerState(sMaker)
     })
@@ -154,10 +160,10 @@ contract('SMaker', function (accounts) {
     beforeEach(async () => {
       await init()
       await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
-      await sMaker.mintSTokens(oneCoin, true, {from: user1Account})
+      await sMaker.mintLongTokens(oneCoin, {from: user1Account})
     })
 
-    it('price increase should update pnl', async () => {
+    it('price increase should update pnl and required collateral', async () => {
       await logSMakerState(sMaker)
 
       await sMaker.setPrice(2 * 10 ** PRICE_DECIMALS, {from: oracleAccount})
@@ -165,7 +171,10 @@ contract('SMaker', function (accounts) {
       let reqCollateral = await sMaker.getRequiredCollateral({from: user1Account})
       console.log('required collateral after:', reqCollateral.toString())
       let pnl = await sMaker.getPnl({from: user1Account})
-      console.log('pnl after:', pnl.toString())
+      console.log('pnl after:', pnl.toString ())
+
+      expect(reqCollateral).to.eq.BN(0)
+      expect(pnl).to.eq.BN(oneCoin)
     })
 
     it('price decrease should update pnl and required collateral', async () => {
@@ -177,11 +186,64 @@ contract('SMaker', function (accounts) {
       console.log('required collateral after:', reqCollateral.toString())
       let pnl = await sMaker.getPnl({from: user1Account})
       console.log('pnl after:', pnl.toString())
+
+      expect(pnl).to.eq.BN(oneCoin.div(new BN(2)).neg())
+      expect(reqCollateral).to.eq.BN(new BN(7).mul(new BN(10).pow(new BN(DECIMALS-1))))
+    })
+
+    it('price increase should update pnl and and required collateral with long and short positions', async () => {
+      await sMaker.mintShortTokens(oneCoin.div(new BN(2)), {from: user1Account})
+      await logSMakerState(sMaker)
+
+      await sMaker.setPrice(2 * 10 ** PRICE_DECIMALS, {from: oracleAccount})
+
+      let reqCollateral = await sMaker.getRequiredCollateral({from: user1Account})
+      console.log('required collateral after:', reqCollateral.toString())
+      let pnl = await sMaker.getPnl({from: user1Account})
+      console.log('pnl after:', pnl.toString())
+
+      expect(pnl).to.eq.BN(oneCoin.div(new BN(2)))
+      expect(reqCollateral).to.eq.BN(0)
+    })
+
+    it('price increase and decrease should update pnl and and required collateral with long and short positions', async () => {
+      await logSMakerState(sMaker)
+
+      await sMaker.setPrice(3 * 10 ** PRICE_DECIMALS, {from: oracleAccount})
+
+      await sMaker.mintShortTokens(oneCoin, {from: user1Account})
+
+      await sMaker.setPrice(2 * 10 ** PRICE_DECIMALS, {from: oracleAccount})
+
+      let reqCollateral = await sMaker.getRequiredCollateral({from: user1Account})
+      console.log('required collateral after:', reqCollateral.toString())
+      let pnl = await sMaker.getPnl({from: user1Account})
+      console.log('pnl after:', pnl.toString())
+
+      expect(pnl).to.eq.BN(twoCoins)
+      expect(reqCollateral).to.eq.BN(0)
     })
   })
 
-  // margin calls
-  // liquidation
-  // fees
-  // max exposure per contract
+  // test collateral redemption
+  describe('Collateral redemption', () => {
+    beforeEach(init)
+
+    it('a user should be able redeem collateral', async () => {
+      await stableCoin.approve(sMaker.address, tenCoins, {from: user1Account})
+      await sMaker.mintLongTokens(oneCoin, {from: user1Account})
+      await logSMakerState(sMaker)
+      await sMaker.burnLongTokens(oneCoin, {from: user1Account})
+      await logSMakerState(sMaker)
+      let collateral = await sMaker.getCollateral({from: user1Account})
+      await sMaker.redeemCollateral(collateral, {from: user1Account})
+      await logSMakerState(sMaker)
+      collateral = await sMaker.getCollateral({from: user1Account})
+      expect(collateral).to.eq.BN(0)
+      const usd = await stableCoin.balanceOf(user1Account, {from: user1Account})
+      expect(usd).to.eq.BN(tenCoins)
+    })
+  })
+
+  // TODO liquidation
 })

@@ -581,7 +581,7 @@ pragma solidity 0.5.14;
 
 
 
-contract SToken is MintableToken, BurnableToken {
+contract SToken is MintableToken {
 
   // meta data
   string public constant version = '0.1';
@@ -608,6 +608,16 @@ contract SToken is MintableToken, BurnableToken {
     _mint(msg.sender, initialBalance);
   }
 
+  /**
+   * @dev Burns a specific amount of tokens.
+   * @param _account The address of the token holder
+   * @param _value The amount of token to be burned.
+   */
+  function burn(address _account, uint _value) public onlyOwner returns (bool success) {
+    _burn(_account, _value);
+    return true;
+  }
+
 }
 
 // File: contracts/maker/SMaker.sol
@@ -630,6 +640,7 @@ contract SMaker is Ownable {
   uint32 public price;
   uint32 public priceTimestamp;
   uint32 public constant DECIMALS = 4;
+  uint32 public constant PRICE_DENOMINATOR = 10 ** 4;
   uint32 public constant COLLATERAL_MARGIN = 20; // %
   uint32 public constant LIQUIDATION_LEVEL = 10; // %
 
@@ -677,6 +688,11 @@ contract SMaker is Ownable {
     uint amount
   );
 
+  event Log (
+    string text,
+    int amount
+  );
+
   /**
   *
   */
@@ -704,7 +720,7 @@ contract SMaker is Ownable {
   */
   function getPnlOf(address accountOwner) internal view returns (int amount) {
     Position memory pos = positions[accountOwner];
-    int pnl = int(price.mul(pos.nbLongTokens.sub(pos.nbShortTokens)).div(DECIMALS)).sub(pos.netPosition);
+    int pnl = int(price).mul(int(pos.nbLongTokens).sub(int(pos.nbShortTokens)).div(PRICE_DENOMINATOR)).sub(pos.netPosition);
     return pnl;
   }
 
@@ -716,22 +732,23 @@ contract SMaker is Ownable {
     return collateral[msg.sender];
   }
 
-  function getRequiredCollateral() public view returns (uint amount) {
+  function getRequiredCollateral() public returns (uint amount) {
     return getRequiredCollateralOf(msg.sender, 0, true, COLLATERAL_MARGIN);
   }
 
-  function getRequiredCollateralOf(address caller, uint amountToMint, bool long, uint32 margin) internal view returns (uint amount) {
-    Position memory pos = positions[caller];
-
+  function getRequiredCollateralOf(address caller, uint amountToMint, bool long, uint32 margin) internal returns (uint amount) {
     // min required collateral
-    uint collateralMargin = 0;
-    int netExposure = pos.netPosition >= 0 ? pos.netPosition : - pos.netPosition;
+    int netPosition = positions[caller].netPosition >= 0 ? positions[caller].netPosition : - positions[caller].netPosition;
+    emit Log("netPosition", netPosition);
 
+    int netExposure;
     // considering new tokens
     if (long) {
-      netExposure = netExposure.add(int(price.mul(amountToMint).div(DECIMALS)));
+      netExposure = netPosition.add(int(price.mul(amountToMint).div(PRICE_DENOMINATOR)));
+      emit Log("1", netExposure);
     } else {
-      netExposure = netExposure.sub(int(price.mul(amountToMint).div(DECIMALS)));
+      netExposure = netPosition.sub(int(price.mul(amountToMint).div(PRICE_DENOMINATOR)));
+      emit Log("2", netExposure);
     }
 
     // we need abs(netExposure)
@@ -739,10 +756,16 @@ contract SMaker is Ownable {
       netExposure = - netExposure;
     }
 
-    collateralMargin = uint(netExposure).mul(margin).div(100);
+    emit Log("netExposure", netExposure);
+
+    int collateralMargin = netExposure.mul(int(margin)).div(100);
+
+    emit Log("collateralMargin", collateralMargin);
 
     // current profit and loss
-    int requiredCollateral = int(collateralMargin).sub(getPnlOf(caller));
+    int requiredCollateral = collateralMargin.sub(getPnlOf(caller));
+
+    emit Log("requiredCollateral", requiredCollateral);
     if (requiredCollateral < 0) {
       return 0;
     } else {
@@ -773,34 +796,37 @@ contract SMaker is Ownable {
   function mintSTokens(uint amount, bool long) external {
     address caller = msg.sender;
     // Transfer collateral into the contract. Assumes caller has approved the transfer of the ERC20 token
-    uint requiredCollateral = getRequiredCollateralOf(caller, amount, long, COLLATERAL_MARGIN).sub(collateral[caller]);
-    // uint requiredCollateral = 1;
-    transferCollateralFrom(caller, requiredCollateral);
+    uint requiredCollateral = getRequiredCollateralOf(caller, amount, long, COLLATERAL_MARGIN);
+    uint availableCollateral = collateral[caller];
+    if (requiredCollateral > availableCollateral) {
+      uint collateralToTransfer = requiredCollateral.sub(availableCollateral);
+      transferCollateralFrom(caller, collateralToTransfer);
+    }
     if (long) {
       require(longToken.mint(caller, amount), "Failed to mint STokens");
       emit TokenMinted(caller, address(longToken), longToken.symbol(), amount);
       positions[caller].nbLongTokens = positions[caller].nbLongTokens.add(amount);
-      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(DECIMALS)));
+      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
     } else {
       require(shortToken.mint(caller, amount), "Failed to mint STokens");
       emit TokenMinted(caller, address(shortToken), shortToken.symbol(), amount);
       positions[caller].nbShortTokens = positions[caller].nbShortTokens.add(amount);
-      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(DECIMALS)));
+      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
     }
   }
 
   function burnSTokens(uint amount, bool long) external {
     address caller = msg.sender;
     if (long) {
-      require(longToken.burnFrom(caller, amount), "Failed to burn STokens");
+      require(longToken.burn(caller, amount), "Failed to burn STokens");
       emit TokenBurned(caller, address(longToken), longToken.symbol(), amount);
       positions[caller].nbLongTokens = positions[caller].nbLongTokens.sub(amount);
-      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(DECIMALS)));
+      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
     } else {
-      require(shortToken.burnFrom(caller, amount), "Failed to burn STokens");
+      require(shortToken.burn(caller, amount), "Failed to burn STokens");
       emit TokenBurned(caller, address(shortToken), shortToken.symbol(), amount);
       positions[caller].nbShortTokens = positions[caller].nbShortTokens.sub(amount);
-      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(DECIMALS)));
+      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
     }
   }
 
