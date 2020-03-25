@@ -688,19 +688,15 @@ contract SMaker is Ownable {
     uint amount
   );
 
-  event Log (
-    string text,
-    int amount
-  );
-
   /**
   *
   */
-  constructor(address _collateralToken, address _shortToken, address _longToken, address _oracle) public {
+  constructor(string memory _symbol, address _collateralToken, address _shortToken, address _longToken, address _oracle) public {
     collateralToken = ERC20(_collateralToken);
     shortToken = SToken(_shortToken);
     longToken = SToken(_longToken);
     oracle = _oracle;
+    symbol = _symbol;
   }
 
   function setPrice(uint32 _price) external onlyOracle {
@@ -732,23 +728,20 @@ contract SMaker is Ownable {
     return collateral[msg.sender];
   }
 
-  function getRequiredCollateral() public returns (uint amount) {
+  function getRequiredCollateral() public view returns (uint amount) {
     return getRequiredCollateralOf(msg.sender, 0, true, COLLATERAL_MARGIN);
   }
 
-  function getRequiredCollateralOf(address caller, uint amountToMint, bool long, uint32 margin) internal returns (uint amount) {
+  function getRequiredCollateralOf(address caller, uint amountToMint, bool long, uint32 margin) internal view returns (uint amount) {
     // min required collateral
     int netPosition = positions[caller].netPosition >= 0 ? positions[caller].netPosition : - positions[caller].netPosition;
-    emit Log("netPosition", netPosition);
 
     int netExposure;
     // considering new tokens
     if (long) {
       netExposure = netPosition.add(int(price.mul(amountToMint).div(PRICE_DENOMINATOR)));
-      emit Log("1", netExposure);
     } else {
       netExposure = netPosition.sub(int(price.mul(amountToMint).div(PRICE_DENOMINATOR)));
-      emit Log("2", netExposure);
     }
 
     // we need abs(netExposure)
@@ -756,16 +749,11 @@ contract SMaker is Ownable {
       netExposure = - netExposure;
     }
 
-    emit Log("netExposure", netExposure);
-
     int collateralMargin = netExposure.mul(int(margin)).div(100);
-
-    emit Log("collateralMargin", collateralMargin);
 
     // current profit and loss
     int requiredCollateral = collateralMargin.sub(getPnlOf(caller));
 
-    emit Log("requiredCollateral", requiredCollateral);
     if (requiredCollateral < 0) {
       return 0;
     } else {
@@ -777,15 +765,15 @@ contract SMaker is Ownable {
     transferCollateralFrom(msg.sender, amount);
   }
 
-  function transferCollateralFrom(address sender, uint amount) public {
+  function transferCollateralFrom(address sender, uint amount) internal {
     require(collateralToken.transferFrom(sender, address(this), amount), "Failed to transfer collateral");
     collateral[sender] = collateral[sender].add(amount);
   }
 
-  function redeemCollateral(uint amount) public {
+  function redeemCollateral(uint amount) external {
     address redeemer = msg.sender;
     uint requiredCollateral = getRequiredCollateralOf(redeemer, 0, true, COLLATERAL_MARGIN);
-    require(collateral[redeemer].sub(amount) < requiredCollateral, "Minimal collateral is required");
+    require(collateral[redeemer] >= requiredCollateral.add(amount), "Minimal collateral is required");
     require(collateralToken.transfer(redeemer, amount), "Failed to transfer collateral back");
     collateral[redeemer] = collateral[redeemer].sub(amount);
   }
@@ -793,41 +781,53 @@ contract SMaker is Ownable {
   /**
   * A user can mint a synthetic token provided he has deposited collateral
   */
-  function mintSTokens(uint amount, bool long) external {
+  function mintLongTokens(uint amount) external {
     address caller = msg.sender;
     // Transfer collateral into the contract. Assumes caller has approved the transfer of the ERC20 token
-    uint requiredCollateral = getRequiredCollateralOf(caller, amount, long, COLLATERAL_MARGIN);
+    uint requiredCollateral = getRequiredCollateralOf(caller, amount, true, COLLATERAL_MARGIN);
     uint availableCollateral = collateral[caller];
     if (requiredCollateral > availableCollateral) {
       uint collateralToTransfer = requiredCollateral.sub(availableCollateral);
       transferCollateralFrom(caller, collateralToTransfer);
     }
-    if (long) {
-      require(longToken.mint(caller, amount), "Failed to mint STokens");
-      emit TokenMinted(caller, address(longToken), longToken.symbol(), amount);
-      positions[caller].nbLongTokens = positions[caller].nbLongTokens.add(amount);
-      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
-    } else {
-      require(shortToken.mint(caller, amount), "Failed to mint STokens");
-      emit TokenMinted(caller, address(shortToken), shortToken.symbol(), amount);
-      positions[caller].nbShortTokens = positions[caller].nbShortTokens.add(amount);
-      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
-    }
+    require(longToken.mint(caller, amount), "Failed to mint STokens");
+    emit TokenMinted(caller, address(longToken), longToken.symbol(), amount);
+    positions[caller].nbLongTokens = positions[caller].nbLongTokens.add(amount);
+    positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
   }
 
-  function burnSTokens(uint amount, bool long) external {
+  /**
+  * A user can mint a synthetic token provided he has deposited collateral
+  */
+  function mintShortTokens(uint amount) external {
     address caller = msg.sender;
-    if (long) {
-      require(longToken.burn(caller, amount), "Failed to burn STokens");
-      emit TokenBurned(caller, address(longToken), longToken.symbol(), amount);
-      positions[caller].nbLongTokens = positions[caller].nbLongTokens.sub(amount);
-      positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
-    } else {
-      require(shortToken.burn(caller, amount), "Failed to burn STokens");
-      emit TokenBurned(caller, address(shortToken), shortToken.symbol(), amount);
-      positions[caller].nbShortTokens = positions[caller].nbShortTokens.sub(amount);
-      positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
+    // Transfer collateral into the contract. Assumes caller has approved the transfer of the ERC20 token
+    uint requiredCollateral = getRequiredCollateralOf(caller, amount, false, COLLATERAL_MARGIN);
+    uint availableCollateral = collateral[caller];
+    if (requiredCollateral > availableCollateral) {
+      uint collateralToTransfer = requiredCollateral.sub(availableCollateral);
+      transferCollateralFrom(caller, collateralToTransfer);
     }
+    require(shortToken.mint(caller, amount), "Failed to mint STokens");
+    emit TokenMinted(caller, address(shortToken), shortToken.symbol(), amount);
+    positions[caller].nbShortTokens = positions[caller].nbShortTokens.add(amount);
+    positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
+  }
+
+  function burnLongTokens(uint amount) external {
+    address caller = msg.sender;
+    require(longToken.burn(caller, amount), "Failed to burn STokens");
+    emit TokenBurned(caller, address(longToken), longToken.symbol(), amount);
+    positions[caller].nbLongTokens = positions[caller].nbLongTokens.sub(amount);
+    positions[caller].netPosition = positions[caller].netPosition.sub(int(amount.mul(price).div(PRICE_DENOMINATOR)));
+  }
+
+  function burnShortTokens(uint amount) external {
+    address caller = msg.sender;
+    require(shortToken.burn(caller, amount), "Failed to burn STokens");
+    emit TokenBurned(caller, address(shortToken), shortToken.symbol(), amount);
+    positions[caller].nbShortTokens = positions[caller].nbShortTokens.sub(amount);
+    positions[caller].netPosition = positions[caller].netPosition.add(int(amount.mul(price).div(PRICE_DENOMINATOR)));
   }
 
   function checkCollateral(address tokenHolder) public {
