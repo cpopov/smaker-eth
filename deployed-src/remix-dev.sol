@@ -1,5 +1,5 @@
 
-// File: contracts/tokens/ERC20.sol
+// File: contracts/tokens/IERC20.sol
 
 pragma solidity 0.5.14;
 

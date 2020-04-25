@@ -1,6 +1,6 @@
 pragma solidity 0.5.14;
 
-import "../tokens/ERC20.sol";
+import "../tokens/IERC20.sol";
 import "../library/SafeMath.sol";
 import "../library/SignedSafeMath.sol";
 import "../tokens/SToken.sol";
@@ -35,7 +35,7 @@ contract SMaker is Ownable {
   mapping(address => Position) internal positions;
 
   address public oracle;
-  ERC20 public collateralToken;
+  IERC20 public collateralToken;
   SToken public longToken;
   SToken public shortToken;
   int public totalNetExposure;
@@ -69,7 +69,7 @@ contract SMaker is Ownable {
   *
   */
   constructor(string memory _symbol, address _collateralToken, address _shortToken, address _longToken, address _oracle) public {
-    collateralToken = ERC20(_collateralToken);
+    collateralToken = IERC20(_collateralToken);
     shortToken = SToken(_shortToken);
     longToken = SToken(_longToken);
     oracle = _oracle;
