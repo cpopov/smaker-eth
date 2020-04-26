@@ -109,8 +109,8 @@ contract('SToken', function (accounts) {
   describe('Token Burning', () => {
     beforeEach(init)
 
-    it.skip('only owner should be able to burn tokens', async () => {
-      tokenContract.transfer(1, {from: creatorAccount});
+    it('only owner should be able to burn tokens', async () => {
+      await tokenContract.transfer(userAccount, 1, {from: creatorAccount});
       await expectRevert(tokenContract.burn(userAccount, 1, {from: userAccount}))
     })
 
